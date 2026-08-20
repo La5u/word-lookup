@@ -1,0 +1,67 @@
+#word-lookup-popup {
+  all: initial;
+  box-sizing: border-box;
+  position: fixed;
+  z-index: 2147483647;
+  width: 300px;
+  max-height: min(360px, calc(100vh - 16px));
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid #d8d8d8;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 4px 18px rgb(0 0 0 / 18%);
+  color: #202122;
+  font: 15px/1.45 system-ui, sans-serif;
+}
+
+#word-lookup-popup .wl-title {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 17px;
+}
+
+#word-lookup-popup .wl-relationship {
+  margin-bottom: 10px;
+  color: #54595d;
+}
+
+#word-lookup-popup .wl-entry {
+  margin-top: 8px;
+  font-weight: 600;
+}
+
+#word-lookup-popup ol {
+  margin: 4px 0 8px;
+  padding-left: 22px;
+}
+
+#word-lookup-popup li {
+  margin: 2px 0;
+  font-size: 16px;
+}
+
+#word-lookup-popup .wl-example {
+  margin-top: 4px;
+  color: #54595d;
+  font-size: 14px;
+  font-style: italic;
+}
+
+#word-lookup-popup .wl-translation {
+  color: #72777d;
+  font-size: 14px;
+}
+
+#word-lookup-popup .wl-link {
+  color: #36c;
+  text-decoration: none;
+}
+
+#word-lookup-popup .wl-link:hover {
+  text-decoration: underline;
+}
+
+#word-lookup-popup .wl-error {
+  color: #72777d;
+}
