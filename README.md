@@ -1,40 +1,86 @@
 # Word Lookup
 
-A minimal Manifest V3 browser extension. Select one complete word on a page and
-release the mouse button to see its entry from English Wiktionary. English is the
-default source language; click the extension icon to select English, French,
-Spanish, German, or Italian.
-Lookups are enabled by default and can be turned off from the same popup.
+Word Lookup is a small browser extension that shows English Wiktionary
+definitions for a selected word. It supports English, French, Spanish, German,
+Italian, Dutch, Swedish, and Romanian source words.
+
+## How it works
+
+1. Select one complete word on a web page.
+2. The content script sends the word and selected source language to the
+   extension's background script.
+3. The background script requests the word's entry from English Wiktionary.
+4. The extension extracts definitions, parts of speech, example sentences, and
+   links to related headwords, then displays them beside the selection.
+5. When noun gender is enabled for a supported language, the background script
+   also asks Apertium for morphological analysis.
+
+Lookups, examples, noun genders, and “no entry found” messages can be configured
+from the extension popup. Preferences are stored locally by the browser.
+
+## APIs
+
+- **English Wiktionary REST API**
+  (`https://en.wiktionary.org/api/rest_v1/page/definition/`) provides
+  definitions, parts of speech, examples, and inflection information.
+  English Wiktionary contains entries for words from all supported source
+  languages.
+
+- **Apertium APY** (`https://www.apertium.org/apy/analyze`) provides
+  morphological analysis used only to identify noun gender. No request
+  is made to Apertium when noun genders are disabled or the selected language is
+  unsupported by the analyzer.
+
+Selected words are sent to these services as needed. The extension does not run
+a server and locally stores only its enabled preferences and source-language
+choice.
+
+Definitions and examples come from English Wiktionary contributors. Wiktionary
+text is available under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)
+and, unless otherwise noted, the GFDL. Noun analysis is provided by
+[Apertium](https://www.apertium.org/). This extension is not endorsed by or
+affiliated with the Wikimedia Foundation.
 
 ## Install locally
 
-1. Open `chrome://extensions` (or `edge://extensions`).
+### Chromium, Chrome, or Edge
+
+1. Open `chrome://extensions` or `edge://extensions`.
 2. Enable **Developer mode**.
 3. Choose **Load unpacked** and select this directory.
 
-`manifest.json` is the Chromium development manifest. To build both browser
-packages, run `./build.sh`; it creates separate ZIP files in `dist/` using
-`manifest.chromium.json` and `manifest.firefox.json`.
+### Firefox 140+
 
-For Firefox 140+, extract the Firefox ZIP, open
-`about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on**, and
-select its `manifest.json`.
+1. Run `./build.sh`.
+2. Extract `dist/word-lookup-0.2.0-firefox.zip`.
+3. Open `about:debugging#/runtime/this-firefox`.
+4. Choose **Load Temporary Add-on** and select the extracted `manifest.json`.
 
-The extension requests access to `en.wiktionary.org` only for definition
-lookups. Selected words are sent there; locally, it stores only the enabled
-preference and chosen source-language code.
+## Build
 
-Definitions and examples come from English Wiktionary contributors. Each popup
-links to its source entry. Wiktionary text is available under
-[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) and, unless
-otherwise noted, the GFDL. This extension is not endorsed by or affiliated with
-the Wikimedia Foundation.
+Run:
 
-## Roadmap
+```sh
+./build.sh
+```
 
-- Add Portuguese, Dutch, Polish, Swedish, Norwegian, Danish, and Romanian as
-  source-language options.
-- Separate the source language from the interface and definition language.
-- Add localized parts of speech and grammatical descriptions for every source
-  language.
-- Add caching and rate-limit backoff while preserving automatic selection.
+This creates separate Chromium and Firefox ZIP files in `dist/`. The extension
+itself is plain HTML, CSS, and JavaScript. Building requires only standard shell
+tools, Python 3, and `zip`; Node.js and npm are not required.
+
+## Tests
+
+npm is used only for development tests. It installs `linkedom`, which supplies a
+small DOM implementation so the content and settings scripts can be tested in
+Node.js.
+
+```sh
+npm install
+npm test
+```
+
+To run syntax checks, tests, and package builds together:
+
+```sh
+npm run check
+```

@@ -1,8 +1,15 @@
 const WORD = /^\p{L}[\p{L}\p{M}]*(?:['’\-]\p{L}[\p{L}\p{M}]*)*$/u;
 const WORD_EDGE = /[\p{L}\p{M}'’\-]/u;
-const FRENCH_ELISION = /^(?:[cdjlmnstç]|qu)['’](?=\p{L})/iu;
-const FORM_RELATION = /\b(?:plural|singular|participle|infinitive|imperative|person|tense|indicative|subjunctive|feminine|masculine|comparative|superlative|form|inflection|spelling)\b.*\bof\b/iu;
-const FORM_DETAIL = /\b(?:first|second|third)(?:-person)?\b.*\b(?:singular|plural|indicative|subjunctive|imperative)\b/iu;
+const ELISIONS = {
+  fr: {
+    start: /^(?:[cdjlmnstç]|qu)['’](?=\p{L})/iu,
+    end: /(?:[cdjlmnstç]|qu)['’]$/iu
+  },
+  it: {
+    start: /^(?:l|un|d|all|dall|dell|nell|sull|coll|quest|quell|bell|senz)['’](?=\p{L})/iu,
+    end: /(?:l|un|d|all|dall|dell|nell|sull|coll|quest|quell|bell|senz)['’]$/iu
+  }
+};
 const POS_LABELS = {
   fr: {
     noun: "nom",
@@ -20,73 +27,131 @@ const POS_LABELS = {
     numeral: "numéral"
   }
 };
-const LANGUAGE_NAMES = {
-  en: "English",
-  fr: "French",
-  es: "Spanish",
-  de: "German",
-  it: "Italian"
-};
 const MAX_DEPTH = 3;
 const MAX_GLOSSES = 3;
 let popup;
 let requestId = 0;
 let enabled = false;
+let sourceLanguage = "en";
+let showExamples = true;
+let showGender = true;
+let showNotFound = false;
+let settingsReady = false;
+const changedSettings = new Set();
 
-chrome.storage.local.get({ enabled: true }).then((settings) => {
-  enabled = settings.enabled;
+chrome.storage.local.get({
+  enabled: true,
+  sourceLanguage: "en",
+  showExamples: true,
+  showGender: true,
+  showNotFound: false
+}).then((settings) => {
+  if (!changedSettings.has("sourceLanguage")) {
+    sourceLanguage = WORD_LOOKUP_LANGUAGES[settings.sourceLanguage]
+      ? settings.sourceLanguage
+      : "en";
+  }
+  if (!changedSettings.has("enabled")) enabled = settings.enabled !== false;
+  if (!changedSettings.has("showExamples")) showExamples = settings.showExamples !== false;
+  if (!changedSettings.has("showGender")) showGender = settings.showGender !== false;
+  if (!changedSettings.has("showNotFound")) showNotFound = settings.showNotFound === true;
+  settingsReady = true;
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local" || !changes.enabled) return;
-  enabled = changes.enabled.newValue ?? true;
-  if (!enabled) removePopup();
+  if (area !== "local") return;
+  Object.keys(changes).forEach((key) => changedSettings.add(key));
+
+  if (changes.sourceLanguage) {
+    sourceLanguage = WORD_LOOKUP_LANGUAGES[changes.sourceLanguage.newValue]
+      ? changes.sourceLanguage.newValue
+      : "en";
+    removePopup();
+  }
+  if (changes.showExamples) {
+    showExamples = changes.showExamples.newValue !== false;
+    removePopup();
+  }
+  if (changes.showGender) {
+    showGender = changes.showGender.newValue !== false;
+    removePopup();
+  }
+  if (changes.showNotFound) {
+    showNotFound = changes.showNotFound.newValue === true;
+    removePopup();
+  }
+  if (changes.enabled) {
+    enabled = changes.enabled.newValue !== false;
+    if (!enabled) removePopup();
+  }
 });
 
 document.addEventListener("mouseup", handleMouseUp);
-document.addEventListener("mousedown", (event) => {
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") removePopup();
+});
+window.addEventListener("resize", removePopup);
+window.addEventListener("scroll", (event) => {
   if (!popup?.contains(event.target)) removePopup();
 }, true);
 
 async function handleMouseUp(event) {
-  if (!enabled) return;
+  if (!settingsReady || !enabled) return;
   if (popup?.contains(event.target)) return;
 
   const selection = window.getSelection();
-  if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) return;
+  if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) {
+    removePopup();
+    return;
+  }
 
-  const word = selection.toString().normalize("NFC");
+  const language = sourceLanguage;
+  const selectedWord = selection.toString().normalize("NFC");
   const range = selection.getRangeAt(0);
-  if (!WORD.test(word) || !hasWholeWordBoundaries(range)) return;
+  const normalized = normalizeSelectedWord(selectedWord, range, language);
+  if (!normalized) {
+    removePopup();
+    return;
+  }
+  if (event.target instanceof Node && !selection.containsNode(event.target, true)) {
+    removePopup();
+    return;
+  }
 
+  const { word, lookupWord } = normalized;
   const rect = range.getBoundingClientRect();
-  if (!rect.width && !rect.height) return;
+  if (!rect.width && !rect.height) {
+    removePopup();
+    return;
+  }
 
   const id = ++requestId;
 
   try {
-    const { sourceLanguage = "en" } = await chrome.storage.local.get("sourceLanguage");
-    const lookupWord = sourceLanguage === "fr" ? word.replace(FRENCH_ELISION, "") : word;
-    const result = await lookup(word, lookupWord, sourceLanguage);
+    const result = await lookup(word, lookupWord, language);
     if (id !== requestId) return;
     renderResult(result, rect);
+    enrichNounGender(result, rect, id);
   } catch (error) {
-    if (id === requestId) renderError(word, error.message, rect);
+    if (id === requestId) renderError(word, error.code, language, rect);
   }
 }
 
 async function lookup(word, lookupWord, language) {
-  const firstEntries = await fetchEntry(lookupWord, language);
+  const first = await fetchEntry(lookupWord, language);
+  lookupWord = first.word;
+  const firstEntries = first.entries;
   const form = findForm(firstEntries, language);
   if (!form || form.lemma.toLocaleLowerCase() === lookupWord.toLocaleLowerCase()) {
-    const entries = summarize(firstEntries);
+    const entries = summarize(firstEntries, language);
     return {
       word,
       headword: lookupWord,
       reduced: lookupWord !== word,
+      variants: first.variants,
       language,
       entries,
-      genders: await fetchNounGenders(lookupWord, language, entries),
+      genders: [],
       url: pageUrl(lookupWord)
     };
   }
@@ -99,7 +164,9 @@ async function lookup(word, lookupWord, language) {
     const key = lemma.toLocaleLowerCase();
     if (visited.has(key)) break;
     visited.add(key);
-    lemmaEntries = await fetchEntry(lemma, language);
+    const fetched = await fetchEntry(lemma, language);
+    lemma = fetched.word;
+    lemmaEntries = fetched.entries;
     const next = findForm(lemmaEntries, language);
     if (!next || visited.has(next.lemma.toLocaleLowerCase())) break;
     if (depth === MAX_DEPTH - 1) break;
@@ -111,104 +178,113 @@ async function lookup(word, lookupWord, language) {
     : form.partOfSpeech.toLowerCase();
   const matchingEntries = lemmaEntries.filter((entry) =>
     entry.partOfSpeech?.toLowerCase() === targetPartOfSpeech);
-  const entries = summarize(matchingEntries.length ? matchingEntries : lemmaEntries);
+  const entries = summarize(matchingEntries.length ? matchingEntries : lemmaEntries, language);
   return {
     word,
     relationship: form.relationship,
     lemma,
     language,
     entries,
-    genders: await fetchNounGenders(lemma, language, entries),
+    genders: [],
     url: pageUrl(lemma)
   };
 }
 
 async function fetchEntry(word, language) {
   const response = await chrome.runtime.sendMessage({ type: "fetchEntry", word, language });
-  if (!response?.ok) throw new Error(response?.error || "Lookup failed");
+  if (!response?.ok) {
+    throw Object.assign(new Error(response?.error || "unavailable"), {
+      code: response?.error || "unavailable"
+    });
+  }
   return response.data;
 }
 
+async function enrichNounGender(result, rect, id) {
+  const headword = result.lemma || result.headword;
+  const genders = await fetchNounGenders(headword, result.language, result.entries);
+  if (id === requestId && popup && genders.length) renderResult({ ...result, genders }, rect);
+}
+
 async function fetchNounGenders(word, language, entries) {
-  if (!entries.some((entry) => entry.partOfSpeech.toLowerCase() === "noun")) return [];
+  if (!showGender || !WORD_LOOKUP_LANGUAGES[language]?.apy
+    || !entries.some((entry) => entry.partOfSpeech.toLowerCase() === "noun")) return [];
 
   try {
-    const response = await chrome.runtime.sendMessage({ type: "fetchPage", word });
-    if (!response?.ok) return [];
-    const parsed = new DOMParser().parseFromString(response.data, "text/html");
-    const languageSection = parsed.querySelector(`h2#${LANGUAGE_NAMES[language]}`)?.closest("section");
-    if (!languageSection) return [];
-
-    return [...languageSection.querySelectorAll("section")]
-      .filter((section) => section.querySelector(":scope > h3, :scope > h4, :scope > h5")
-        ?.textContent.trim() === "Noun")
-      .map((section) => section.querySelector(".headword-line .gender abbr")?.textContent.trim())
-      .filter(Boolean);
+    const response = await chrome.runtime.sendMessage({ type: "fetchGender", word, language });
+    return response?.ok && Array.isArray(response.data) ? response.data : [];
   } catch {
     return [];
   }
 }
 
 function findForm(entries, language) {
-  let match = null;
+  if (!entries.length || entries.some((entry) => !isFormOnly(entry, language))) return null;
 
-  for (const entry of entries) {
-    for (const item of entry.definitions || []) {
-      const parsed = new DOMParser().parseFromString(item.definition || "", "text/html");
-      const form = parsed.querySelector(".form-of-definition");
-      const text = parsed.body.textContent.replace(/\s+/g, " ").trim();
-      if (!isFormDefinition(parsed, text)) return null;
-
-      const link = form?.querySelector(`.form-of-definition-link [lang="${language}"] a`)
-        || form?.querySelector(".form-of-definition-link a");
-      if (link) {
-        match ||= {
-          lemma: link.getAttribute("title") || link.textContent.trim(),
-          relationship: form.textContent.replace(/\s+/g, " ").trim(),
-          partOfSpeech: entry.partOfSpeech || "Entry"
-        };
-        continue;
-      }
-
-      // Conservative fallback for older responses without form-of CSS classes.
-      const fallback = text.match(/^(.*(?:plural|singular|participle|infinitive|imperative|person|tense|form)\b.*?\bof)\s+([\p{L}\p{M}'’\-]+)$/iu);
-      if (fallback) match ||= {
-        relationship: text,
-        lemma: fallback[2],
-        partOfSpeech: entry.partOfSpeech || "Entry"
-      };
-    }
-  }
-  return match;
+  const matches = entries.flatMap((entry) => (entry.definitions || [])
+    .map((item) => parseFormDefinition(item.definition, language))
+    .filter(Boolean)
+    .map((form) => ({ ...form, partOfSpeech: entry.partOfSpeech || "Entry" })));
+  const lemmas = new Set(matches.map((match) =>
+    match.lemma.toLocaleLowerCase(language)));
+  return lemmas.size === 1 ? matches[0] : null;
 }
 
-function summarize(entries) {
-  const hasLexicalEntry = entries.some((entry) => !isFormOnly(entry));
-  return entries.filter((entry) => !hasLexicalEntry || !isFormOnly(entry)).map((entry) => ({
-    partOfSpeech: entry.partOfSpeech || "Entry",
-    senses: (entry.definitions || [])
+function parseFormDefinition(html, language) {
+  const parsed = new DOMParser().parseFromString(html || "", "text/html");
+  const form = parsed.querySelector(".form-of-definition");
+  const text = parsed.body.textContent.replace(/\s+/g, " ").trim();
+
+  if (form) {
+    const localizedLinks = [...form.querySelectorAll(
+      `.form-of-definition-link [lang="${language}"] a`
+    )];
+    const links = localizedLinks.length
+      ? localizedLinks
+      : [...form.querySelectorAll(".form-of-definition-link a")];
+    if (links.length === 1) return {
+      lemma: links[0].getAttribute("title") || links[0].textContent.trim(),
+      relationship: form.textContent.replace(/\s+/g, " ").trim()
+    };
+  }
+
+  // Conservative fallback for older responses without form-of CSS classes.
+  const fallback = text.match(/^((?:(?:first|second|third)(?:-person)?|simple past|past tense|past participle|present participle|gerund|plural|singular|infinitive|imperative|feminine|masculine|comparative|superlative|inflection|spelling|form)\b.*?\bof)\s+([\p{L}\p{M}'’\-]+)$/iu);
+  return fallback ? { relationship: text, lemma: fallback[2] } : null;
+}
+
+function summarize(entries, language) {
+  return entries.map((entry) => {
+    const senses = (entry.definitions || [])
       .map((item) => ({
         gloss: textFromHtml(item.definition),
         example: textFromHtml(item.parsedExamples?.[0]?.example || item.examples?.[0]),
-        translation: textFromHtml(item.parsedExamples?.[0]?.translation)
+        translation: textFromHtml(item.parsedExamples?.[0]?.translation),
+        form: isFormDefinitionHtml(item.definition)
       }))
       .filter((sense) => sense.gloss)
-      .slice(0, MAX_GLOSSES)
-  })).filter((entry) => entry.senses.length);
+      .filter((sense, index, all) => !sense.form || !all.slice(0, index)
+        .some((previous) => previous.form && previous.gloss.includes(sense.gloss)))
+      .slice(0, MAX_GLOSSES);
+    return {
+      partOfSpeech: entry.partOfSpeech || "Entry",
+      variant: entry.lookupVariant,
+      senses
+    };
+  }).filter((entry) => entry.senses.length);
 }
 
-function isFormOnly(entry) {
-  const definitions = entry.definitions || [];
-  return definitions.length > 0 && definitions.every((item) => {
-    const parsed = new DOMParser().parseFromString(item.definition || "", "text/html");
-    const text = parsed.body.textContent.replace(/\s+/g, " ").trim();
-    return isFormDefinition(parsed, text);
-  });
-}
-
-function isFormDefinition(parsed, text) {
+function isFormDefinitionHtml(html) {
+  const parsed = new DOMParser().parseFromString(html || "", "text/html");
+  const text = parsed.body.textContent.replace(/\s+/g, " ").trim();
   return Boolean(parsed.querySelector(".form-of-definition"))
-    && (FORM_RELATION.test(text) || FORM_DETAIL.test(text));
+    || /^(?:contraction|plural|singular|inflection|form|simple past|past tense|past participle|present participle|gerund|infinitive|imperative|feminine|masculine|comparative|superlative|(?:first|second|third)(?:-person)?)\b.*\bof\b/iu.test(text);
+}
+
+function isFormOnly(entry, language) {
+  const definitions = entry.definitions || [];
+  return definitions.length > 0 && definitions.every((item) =>
+    isFormDefinitionHtml(item.definition) || Boolean(parseFormDefinition(item.definition, language)));
 }
 
 function textFromHtml(html) {
@@ -225,6 +301,39 @@ function hasWholeWordBoundaries(range) {
   const before = adjacentCharacter(range.startContainer, range.startOffset, -1);
   const after = adjacentCharacter(range.endContainer, range.endOffset, 1);
   return !WORD_EDGE.test(before) && !WORD_EDGE.test(after);
+}
+
+function normalizeSelectedWord(word, range, language) {
+  if (!WORD.test(word)) return null;
+
+  const elision = ELISIONS[language];
+  if (hasWholeWordBoundaries(range)) {
+    return { word, lookupWord: elision ? word.replace(elision.start, "") : word };
+  }
+
+  if (!elision || WORD_EDGE.test(adjacentCharacter(range.endContainer, range.endOffset, 1))) {
+    return null;
+  }
+
+  const before = precedingText(range, 7);
+  const match = before.match(elision.end);
+  if (!match || WORD_EDGE.test(before[match.index - 1] || "")) return null;
+
+  return { word: match[0] + word, lookupWord: word };
+}
+
+function precedingText(range, limit) {
+  let boundary = range.startContainer.nodeType === Node.TEXT_NODE
+    ? range.startContainer.parentElement
+    : range.startContainer;
+  while (boundary?.parentElement && !isLayoutBoundary(boundary)) {
+    boundary = boundary.parentElement;
+  }
+
+  const context = range.cloneRange();
+  context.setStart(boundary || document.body, 0);
+  context.setEnd(range.startContainer, range.startOffset);
+  return context.toString().slice(-limit);
 }
 
 function adjacentCharacter(container, offset, direction) {
@@ -272,21 +381,27 @@ function edgeCharacter(node, direction) {
   return "";
 }
 
-function createPopup(rect, role) {
+function createPopup(role) {
   popup?.remove();
   popup = document.createElement("aside");
   popup.id = "word-lookup-popup";
   popup.setAttribute("role", role);
   document.documentElement.appendChild(popup);
-  positionPopup(rect);
 }
 
 function renderResult(result, rect) {
-  createPopup(rect, "dialog");
+  createPopup("dialog");
 
   const headword = result.lemma || result.headword || result.word;
+  const displayedHeadword = result.variants?.length
+    ? result.variants.join(" / ")
+    : headword;
+  popup.setAttribute("aria-label", `Word lookup: ${displayedHeadword}`);
   const gender = [...new Set(result.genders || [])].join(", ");
-  const title = element("strong", gender ? `${headword} · ${gender}` : headword);
+  const title = element(
+    "strong",
+    gender ? `${displayedHeadword} · ${gender}` : displayedHeadword
+  );
   title.className = "wl-title";
   popup.appendChild(title);
 
@@ -302,15 +417,16 @@ function renderResult(result, rect) {
 
   result.entries.forEach((entry) => {
     const partOfSpeech = localizePartOfSpeech(entry.partOfSpeech, result.language);
-    popup.appendChild(element("div", partOfSpeech, "wl-entry"));
+    const entryLabel = entry.variant ? `${partOfSpeech} · ${entry.variant}` : partOfSpeech;
+    popup.appendChild(element("div", entryLabel, "wl-entry"));
 
     const list = document.createElement("ol");
     entry.senses.forEach((sense) => {
-      const item = element("li", sense.gloss);
-      if (sense.example) {
+      const item = element("li", sense.gloss, sense.form ? "wl-form" : undefined);
+      if (showExamples && sense.example) {
         item.appendChild(element("div", sense.example, "wl-example"));
       }
-      if (sense.translation) {
+      if (showExamples && sense.translation) {
         item.appendChild(element("div", sense.translation, "wl-translation"));
       }
       list.appendChild(item);
@@ -323,6 +439,7 @@ function renderResult(result, rect) {
   link.target = "_blank";
   link.rel = "noopener noreferrer";
   popup.appendChild(link);
+  positionPopup(rect);
 }
 
 function localizePartOfSpeech(partOfSpeech, language) {
@@ -370,12 +487,26 @@ function localizeRelationship(text, language) {
   return text;
 }
 
-function renderError(word, message, rect) {
-  createPopup(rect, "status");
+function renderError(word, code, language, rect) {
+  if (code === "not_found" && !showNotFound) {
+    removePopup();
+    return;
+  }
+
+  const languageName = WORD_LOOKUP_LANGUAGES[language]?.name || "selected language";
+  const messages = {
+    not_found: `No ${languageName} entry found.`,
+    unavailable: "Wiktionary is currently unavailable.",
+    invalid: "This word cannot be looked up."
+  };
+
+  createPopup("status");
+  popup.setAttribute("aria-label", `Word lookup: ${word}`);
   popup.replaceChildren(
     element("strong", word, "wl-title"),
-    element("div", message, "wl-error")
+    element("div", messages[code] || "Lookup failed.", "wl-error")
   );
+  positionPopup(rect);
 }
 
 function element(tag, text, className) {
@@ -387,12 +518,26 @@ function element(tag, text, className) {
 
 function positionPopup(rect) {
   const gap = 8;
-  const width = 300;
-  const left = Math.max(gap, Math.min(rect.left, window.innerWidth - width - gap));
-  const top = Math.max(gap, Math.min(rect.bottom + gap, window.innerHeight - 180));
+  const viewportWidth = Math.max(0, window.innerWidth);
+  const viewportHeight = Math.max(0, window.innerHeight);
+  const viewportMaxHeight = Math.min(360, Math.max(0, viewportHeight - gap * 2));
+  popup.style.maxHeight = `${viewportMaxHeight}px`;
+
+  const spaceBelow = Math.max(0, viewportHeight - rect.bottom - gap);
+  const spaceAbove = Math.max(0, rect.top - gap);
+  const initialHeight = Math.min(popup.offsetHeight, viewportMaxHeight);
+  const showAbove = spaceBelow < initialHeight && spaceAbove > spaceBelow;
+  const availableHeight = showAbove ? spaceAbove : spaceBelow;
+  popup.style.maxHeight = `${Math.min(viewportMaxHeight, availableHeight)}px`;
+
+  const width = Math.min(popup.offsetWidth, Math.max(0, viewportWidth - gap * 2));
+  const height = Math.min(popup.offsetHeight, availableHeight);
+  const desiredTop = showAbove ? rect.top - height - gap : rect.bottom + gap;
+  const left = Math.max(gap, Math.min(rect.left, viewportWidth - width - gap));
+  const top = Math.max(gap, Math.min(desiredTop, viewportHeight - height - gap));
+
   popup.style.left = `${left}px`;
   popup.style.top = `${top}px`;
-  popup.style.maxHeight = `${Math.max(80, window.innerHeight - top - gap)}px`;
 }
 
 function removePopup() {

@@ -3,7 +3,7 @@
   box-sizing: border-box;
   position: fixed;
   z-index: 2147483647;
-  width: 300px;
+  width: min(300px, calc(100vw - 16px));
   max-height: min(360px, calc(100vh - 16px));
   overflow: auto;
   padding: 12px 14px;
@@ -39,6 +39,12 @@
 #word-lookup-popup li {
   margin: 2px 0;
   font-size: 16px;
+}
+
+#word-lookup-popup li.wl-form {
+  color: #72777d;
+  font-size: 14px;
+  list-style: none;
 }
 
 #word-lookup-popup .wl-example {
