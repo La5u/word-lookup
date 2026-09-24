@@ -10,7 +10,6 @@ const CACHE_LIMIT = 100;
 const FETCH_TIMEOUT_MS = 10000;
 const cache = new Map();
 let historyWrite = Promise.resolve();
-let enabledToggle = Promise.resolve();
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || !["fetchEntry", "fetchGender", "recordLookup", "clearHistory"]
@@ -29,16 +28,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }));
   return true;
 });
-
-if (chrome.commands?.onCommand?.addListener) {
-  chrome.commands.onCommand.addListener((command) => {
-    if (command !== "toggle-enabled") return;
-    enabledToggle = enabledToggle.then(async () => {
-      const settings = await chrome.storage.local.get({ enabled: true });
-      await chrome.storage.local.set({ enabled: settings.enabled === false });
-    }).catch(() => {});
-  });
-}
 
 function queueHistoryMutation(message) {
   const mutation = historyWrite.then(() =>

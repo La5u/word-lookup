@@ -21,7 +21,6 @@ async function ticks() {
 
 function backgroundHarness(initial = {}) {
   let messageListener;
-  let commandListener;
   let values = {
     enabled: true,
     lookupHistory: [],
@@ -41,7 +40,6 @@ function backgroundHarness(initial = {}) {
         getManifest: () => ({ version: "0.0.0" }),
         onMessage: { addListener(listener) { messageListener = listener; } }
       },
-      commands: { onCommand: { addListener(listener) { commandListener = listener; } } },
       storage: {
         local: {
           get: async () => ({ ...values }),
@@ -58,10 +56,6 @@ function backgroundHarness(initial = {}) {
       return new Promise((resolve) => {
         assert.equal(messageListener(message, {}, resolve), true);
       });
-    },
-    async command(command) {
-      commandListener(command);
-      await vm.runInContext("enabledToggle", context);
     },
     get values() { return values; },
     run(expression) { return vm.runInContext(expression, context); }
@@ -151,16 +145,6 @@ test("record and clear history mutations are serialized", async () => {
   const nextRecord = harness.send({ type: "recordLookup", word: "dog", language: "en", timestamp: 3 });
   await nextRecord;
   assert.equal(JSON.stringify(harness.values.lookupHistory.map((entry) => entry.word)), JSON.stringify(["dog", "cat"]));
-});
-
-test("the browser command toggles the same enabled storage setting", async () => {
-  const harness = backgroundHarness({ enabled: true });
-  await harness.command("toggle-enabled");
-  assert.equal(harness.values.enabled, false);
-  await harness.command("toggle-enabled");
-  assert.equal(harness.values.enabled, true);
-  await harness.command("unrelated-command");
-  assert.equal(harness.values.enabled, true);
 });
 
 function settingsHarness(initialHistory = []) {

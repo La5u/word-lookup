@@ -39,8 +39,7 @@ History tab keeps the 100 most recently looked-up headword/language pairs
 locally, deduplicated and shown with links to Wiktionary. Inflected forms are
 recorded under the headword that was displayed. You can clear the list at once.
 Older history entries are reduced to this format on the next lookup. Gender
-enrichment is display-only and does not write a second history entry. The enabled
-setting can also be toggled with the suggested **Alt+Shift+L** browser shortcut.
+enrichment is display-only and does not write a second history entry.
 Preferences and history are stored locally by the browser; failed or unavailable
 lookups are not recorded.
 

@@ -11,14 +11,6 @@
   "background": {
     "service_worker": "background.js"
   },
-  "commands": {
-    "toggle-enabled": {
-      "suggested_key": {
-        "default": "Alt+Shift+L"
-      },
-      "description": "Toggle word lookups"
-    }
-  },
   "action": {
     "default_title": "Word Lookup settings",
     "default_popup": "settings.html",
