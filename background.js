@@ -1,18 +1,26 @@
-if (typeof WORD_LOOKUP_LANGUAGES === "undefined") importScripts("languages.js");
+// Firefox loads these through manifest background scripts instead.
+if (typeof importScripts === "function") {
+  importScripts("languages.js", "shared.js", "history.js");
+}
 
 const API = "https://en.wiktionary.org/api/rest_v1/page/definition/";
 const APERTIUM_API = "https://www.apertium.org/apy/analyze";
-const API_USER_AGENT = "WordLookup/0.2.0 (https://github.com/La5u/word-lookup)";
+const API_USER_AGENT = `WordLookup/${chrome.runtime.getManifest().version} (https://github.com/La5u/word-lookup)`;
 const CACHE_LIMIT = 100;
 const FETCH_TIMEOUT_MS = 10000;
 const cache = new Map();
+let historyWrite = Promise.resolve();
+let enabledToggle = Promise.resolve();
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!message || !["fetchEntry", "fetchGender"].includes(message.type)) return;
+  if (!message || !["fetchEntry", "fetchGender", "recordLookup", "clearHistory"]
+    .includes(message.type)) return;
 
   const request = message.type === "fetchEntry"
     ? fetchEntry(message.word, message.language)
-    : fetchGender(message.word, message.language);
+    : message.type === "fetchGender"
+      ? fetchGender(message.word, message.language)
+      : queueHistoryMutation(message);
   request
     .then((data) => sendResponse({ ok: true, data }))
     .catch((error) => sendResponse({
@@ -22,8 +30,45 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
+if (chrome.commands?.onCommand?.addListener) {
+  chrome.commands.onCommand.addListener((command) => {
+    if (command !== "toggle-enabled") return;
+    enabledToggle = enabledToggle.then(async () => {
+      const settings = await chrome.storage.local.get({ enabled: true });
+      await chrome.storage.local.set({ enabled: settings.enabled === false });
+    }).catch(() => {});
+  });
+}
+
+function queueHistoryMutation(message) {
+  const mutation = historyWrite.then(() =>
+    message.type === "recordLookup" ? recordLookup(message) : clearHistory());
+  historyWrite = mutation.catch(() => {});
+  return mutation;
+}
+
+async function recordLookup(message) {
+  const entry = historyEntryFromLookup(message);
+  if (!entry) throw lookupError("invalid");
+
+  const history = await storedHistory();
+  const next = normalizeHistory([entry, ...history]);
+  await chrome.storage.local.set({ [HISTORY_KEY]: next });
+  return entry;
+}
+
+async function clearHistory() {
+  await chrome.storage.local.set({ [HISTORY_KEY]: [] });
+  return [];
+}
+
+async function storedHistory() {
+  const stored = await chrome.storage.local.get({ [HISTORY_KEY]: [] });
+  return normalizeHistory(stored?.[HISTORY_KEY]);
+}
+
 async function fetchEntry(word, language) {
-  if (!/^\p{L}[\p{L}\p{M}'’\-]*$/u.test(word) || !WORD_LOOKUP_LANGUAGES[language]) {
+  if (!isLookupWord(word) || !isSupportedLanguage(language)) {
     throw lookupError("invalid");
   }
 
@@ -55,7 +100,7 @@ async function fetchEntry(word, language) {
 
   if (exactEntries.length) return { word, entries: exactEntries };
 
-  if (WORD_LOOKUP_LANGUAGES[language].preserveCase) {
+  if (preserveCase) {
     const [first = "", ...rest] = [...lowercase];
     const titlecase = first.toLocaleUpperCase(language) + rest.join("");
     if (titlecase !== word) {
@@ -68,7 +113,54 @@ async function fetchEntry(word, language) {
 }
 
 function entriesFor(data, language) {
-  return Array.isArray(data?.[language]) ? data[language] : [];
+  if (!data || typeof data !== "object" || Array.isArray(data)
+    || !Array.isArray(data[language])) return [];
+  return data[language].map(normalizeEntry).filter(Boolean);
+}
+
+function normalizeEntry(entry) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)
+    || !Array.isArray(entry.definitions)) return null;
+  const definitions = entry.definitions.map(normalizeDefinition).filter(Boolean);
+  if (!definitions.length) return null;
+  const partOfSpeech = typeof entry.partOfSpeech === "string" && entry.partOfSpeech.trim()
+    ? entry.partOfSpeech
+    : "Entry";
+  return { partOfSpeech, definitions };
+}
+
+function normalizeDefinition(definition) {
+  if (!definition || typeof definition !== "object" || Array.isArray(definition)
+    || typeof definition.definition !== "string" || !definition.definition.trim()) return null;
+
+  const normalized = { definition: definition.definition };
+  const parsedExamples = normalizeParsedExamples(definition.parsedExamples);
+  const examples = normalizeExamples(definition.examples);
+  if (parsedExamples.length) normalized.parsedExamples = parsedExamples;
+  if (examples.length) normalized.examples = examples;
+  return normalized;
+}
+
+function normalizeParsedExamples(examples) {
+  if (!Array.isArray(examples)) return [];
+  return examples.map((example) => {
+    if (typeof example === "string") return { example };
+    if (!example || typeof example !== "object" || Array.isArray(example)) return null;
+    const normalized = {};
+    if (typeof example.example === "string") normalized.example = example.example;
+    if (typeof example.translation === "string") normalized.translation = example.translation;
+    return Object.keys(normalized).length ? normalized : null;
+  }).filter(Boolean);
+}
+
+function normalizeExamples(examples) {
+  if (!Array.isArray(examples)) return [];
+  return examples.map((example) => {
+    if (typeof example === "string") return example;
+    if (!example || typeof example !== "object" || Array.isArray(example)
+      || typeof example.example !== "string") return null;
+    return example.example;
+  }).filter((example) => example !== null);
 }
 
 async function fetchDefinitions(word) {
@@ -80,8 +172,8 @@ async function fetchDefinitions(word) {
 }
 
 async function fetchGender(word, language) {
-  const apy = WORD_LOOKUP_LANGUAGES[language]?.apy;
-  if (!/^\p{L}[\p{L}\p{M}'’\-]*$/u.test(word) || !apy) throw lookupError("invalid");
+  const apy = isSupportedLanguage(language) ? WORD_LOOKUP_LANGUAGES[language].apy : null;
+  if (!isLookupWord(word) || !apy) throw lookupError("invalid");
   const query = new URLSearchParams({ q: word, lang: apy });
   const data = await fetchCached(
     `gender:${language}:${word}`,

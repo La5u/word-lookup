@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Word Lookup",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Look up selected words in English Wiktionary.",
   "permissions": ["storage"],
   "host_permissions": [
@@ -10,6 +10,14 @@
   ],
   "background": {
     "service_worker": "background.js"
+  },
+  "commands": {
+    "toggle-enabled": {
+      "suggested_key": {
+        "default": "Alt+Shift+L"
+      },
+      "description": "Toggle word lookups"
+    }
   },
   "action": {
     "default_title": "Word Lookup settings",
@@ -30,7 +38,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["languages.js", "content.js"],
+      "js": ["languages.js", "shared.js", "content.js"],
       "css": ["content.css"]
     }
   ]

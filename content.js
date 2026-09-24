@@ -1,5 +1,9 @@
-const WORD = /^\p{L}[\p{L}\p{M}]*(?:['’\-]\p{L}[\p{L}\p{M}]*)*$/u;
 const WORD_EDGE = /[\p{L}\p{M}'’\-]/u;
+const FORM_WORDS = "contraction|plural|singular|inflection|form|simple past|past tense|past participle|present participle|gerund|infinitive|imperative|feminine|masculine|comparative|superlative|spelling|(?:first|second|third)(?:-person)?";
+const FORM_HINT = new RegExp(`form-of-definition|(?:${FORM_WORDS})\\b.{0,120}\\bof\\b`, "iu");
+const FORM_LABEL = new RegExp(`^(?:${FORM_WORDS})\\b.*\\bof\\b`, "iu");
+// Conservative fallback for older responses without form-of CSS classes.
+const FORM_FALLBACK = new RegExp(`^((?:${FORM_WORDS})\\b.*?\\bof)\\s+([\\p{L}\\p{M}'’\\-]+)$`, "iu");
 const ELISIONS = {
   fr: {
     start: /^(?:[cdjlmnstç]|qu)['’](?=\p{L})/iu,
@@ -29,60 +33,34 @@ const POS_LABELS = {
 };
 const MAX_DEPTH = 3;
 const MAX_GLOSSES = 3;
+const LOADING_DELAY_MS = 180;
 let popup;
+let activeResult = null;
+let loadingTimer = null;
 let requestId = 0;
-let enabled = false;
-let sourceLanguage = "en";
-let showExamples = true;
-let showGender = true;
-let showNotFound = false;
+const settings = { ...DEFAULT_SETTINGS };
 let settingsReady = false;
 const changedSettings = new Set();
 
-chrome.storage.local.get({
-  enabled: true,
-  sourceLanguage: "en",
-  showExamples: true,
-  showGender: true,
-  showNotFound: false
-}).then((settings) => {
-  if (!changedSettings.has("sourceLanguage")) {
-    sourceLanguage = WORD_LOOKUP_LANGUAGES[settings.sourceLanguage]
-      ? settings.sourceLanguage
-      : "en";
+chrome.storage.local.get(DEFAULT_SETTINGS).then((stored) => {
+  for (const key of Object.keys(DEFAULT_SETTINGS)) {
+    if (!changedSettings.has(key)) settings[key] = normalizeSetting(key, stored[key]);
   }
-  if (!changedSettings.has("enabled")) enabled = settings.enabled !== false;
-  if (!changedSettings.has("showExamples")) showExamples = settings.showExamples !== false;
-  if (!changedSettings.has("showGender")) showGender = settings.showGender !== false;
-  if (!changedSettings.has("showNotFound")) showNotFound = settings.showNotFound === true;
+}).catch(() => {
+  // Defaults remain usable if extension storage is temporarily unavailable.
+}).finally(() => {
   settingsReady = true;
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  Object.keys(changes).forEach((key) => changedSettings.add(key));
-
-  if (changes.sourceLanguage) {
-    sourceLanguage = WORD_LOOKUP_LANGUAGES[changes.sourceLanguage.newValue]
-      ? changes.sourceLanguage.newValue
-      : "en";
-    removePopup();
+  const keys = Object.keys(changes).filter((key) => Object.hasOwn(DEFAULT_SETTINGS, key));
+  for (const key of keys) {
+    changedSettings.add(key);
+    settings[key] = normalizeSetting(key, changes[key].newValue);
   }
-  if (changes.showExamples) {
-    showExamples = changes.showExamples.newValue !== false;
+  if (keys.some((key) => key !== "enabled") || (changes.enabled && !settings.enabled)) {
     removePopup();
-  }
-  if (changes.showGender) {
-    showGender = changes.showGender.newValue !== false;
-    removePopup();
-  }
-  if (changes.showNotFound) {
-    showNotFound = changes.showNotFound.newValue === true;
-    removePopup();
-  }
-  if (changes.enabled) {
-    enabled = changes.enabled.newValue !== false;
-    if (!enabled) removePopup();
   }
 });
 
@@ -96,7 +74,7 @@ window.addEventListener("scroll", (event) => {
 }, true);
 
 async function handleMouseUp(event) {
-  if (!settingsReady || !enabled) return;
+  if (!event.isTrusted || !settingsReady || !settings.enabled) return;
   if (popup?.contains(event.target)) return;
 
   const selection = window.getSelection();
@@ -105,7 +83,7 @@ async function handleMouseUp(event) {
     return;
   }
 
-  const language = sourceLanguage;
+  const language = settings.sourceLanguage;
   const selectedWord = selection.toString().normalize("NFC");
   const range = selection.getRangeAt(0);
   const normalized = normalizeSelectedWord(selectedWord, range, language);
@@ -125,59 +103,120 @@ async function handleMouseUp(event) {
     return;
   }
 
-  const id = ++requestId;
+  removePopup();
+  const id = requestId;
+  scheduleLoading(word, rect, id);
 
   try {
-    const result = await lookup(word, lookupWord, language);
+    const result = await lookup(word, lookupWord, language, (interim) => {
+      if (id === requestId) {
+        clearLoadingTimer();
+        renderResult(interim, rect);
+      }
+    });
     if (id !== requestId) return;
+    clearLoadingTimer();
     renderResult(result, rect);
-    enrichNounGender(result, rect, id);
+    recordLookup(result);
+    enrichNounGender(result, rect, id).catch(() => {
+      // Gender enrichment is optional and never changes lookup history.
+    });
+    enrichMixedForms(result, rect, id).catch(() => {
+      // The selected word's own definitions remain available on failure.
+    });
   } catch (error) {
-    if (id === requestId) renderError(word, error.code, language, rect);
+    if (id !== requestId) return;
+    clearLoadingTimer();
+    renderError(word, error.code, language, rect);
   }
 }
 
-async function lookup(word, lookupWord, language) {
+function scheduleLoading(word, rect, id) {
+  clearLoadingTimer();
+  if (!settings.showLoading) return;
+  loadingTimer = setTimeout(() => {
+    loadingTimer = null;
+    if (id === requestId) renderLoading(word, rect);
+  }, LOADING_DELAY_MS);
+}
+
+function clearLoadingTimer() {
+  if (loadingTimer === null) return;
+  clearTimeout(loadingTimer);
+  loadingTimer = null;
+}
+
+function recordLookup(result) {
+  const message = {
+    type: "recordLookup",
+    word: result.page,
+    language: result.language
+  };
+  try {
+    Promise.resolve(chrome.runtime.sendMessage(message)).catch(() => {});
+  } catch {
+    // History is best-effort and must not turn a displayed result into an error.
+  }
+}
+
+async function lookup(word, lookupWord, language, onPartial) {
   const first = await fetchEntry(lookupWord, language);
   lookupWord = first.word;
   const firstEntries = first.entries;
-  const form = findForm(firstEntries, language);
-  if (!form || form.lemma.toLocaleLowerCase() === lookupWord.toLocaleLowerCase()) {
-    const entries = summarize(firstEntries, language);
-    return {
-      word,
-      headword: lookupWord,
-      reduced: lookupWord !== word,
-      variants: first.variants,
-      language,
-      entries,
-      genders: [],
-      url: pageUrl(lookupWord)
-    };
+  const original = () => ({
+    word,
+    headword: lookupWord,
+    reduced: lookupWord !== word,
+    variants: first.variants,
+    language,
+    entries: summarize(firstEntries, language),
+    genders: [],
+    page: lookupWord
+  });
+  const collected = collectForms(firstEntries, language);
+  const { forms, formOnly } = collected;
+  const form = findForm(firstEntries, language, collected);
+  if (formOnly && !form && forms.length > 1) {
+    onPartial?.(original());
+    return resolveForms(forms, language, firstEntries, (resolved) =>
+      combineForms(word, resolved, language, original));
+  }
+  if (!form || form.lemma.toLocaleLowerCase(language) === lookupWord.toLocaleLowerCase(language)) {
+    const result = original();
+    if (!form) {
+      const mixedForms = formOnly ? [] : forms.filter(({ lemma }) =>
+        isLookupWord(lemma) && lemma.toLocaleLowerCase(language) !== lookupWord.toLocaleLowerCase(language));
+      if (mixedForms.length) {
+        result.enrichForms = () => resolveForms(mixedForms, language, firstEntries,
+          (resolved) => combineMixedForms(result, resolved));
+      }
+    }
+    return result;
   }
 
-  const visited = new Set([lookupWord.toLocaleLowerCase()]);
+  const visited = new Set([lookupWord.toLocaleLowerCase(language)]);
   let lemma = form.lemma;
   let lemmaEntries = [];
 
   for (let depth = 0; depth < MAX_DEPTH; depth += 1) {
-    const key = lemma.toLocaleLowerCase();
+    const key = lemma.toLocaleLowerCase(language);
     if (visited.has(key)) break;
     visited.add(key);
-    const fetched = await fetchEntry(lemma, language);
+    let fetched;
+    try {
+      fetched = await fetchEntry(lemma, language);
+    } catch {
+      return original();
+    }
     lemma = fetched.word;
     lemmaEntries = fetched.entries;
     const next = findForm(lemmaEntries, language);
-    if (!next || visited.has(next.lemma.toLocaleLowerCase())) break;
+    if (!next || visited.has(next.lemma.toLocaleLowerCase(language))) break;
     if (depth === MAX_DEPTH - 1) break;
     lemma = next.lemma;
   }
 
-  const targetPartOfSpeech = form.partOfSpeech.toLowerCase() === "participle"
-    ? "verb"
-    : form.partOfSpeech.toLowerCase();
-  const matchingEntries = lemmaEntries.filter((entry) =>
-    entry.partOfSpeech?.toLowerCase() === targetPartOfSpeech);
+  const matchingEntries = entriesForForm(form, lemmaEntries);
   const entries = summarize(matchingEntries.length ? matchingEntries : lemmaEntries, language);
   return {
     word,
@@ -186,11 +225,14 @@ async function lookup(word, lookupWord, language) {
     language,
     entries,
     genders: [],
-    url: pageUrl(lemma)
+    page: lemma
   };
 }
 
 async function fetchEntry(word, language) {
+  if (!isLookupWord(word)) {
+    throw Object.assign(new Error("invalid"), { code: "invalid" });
+  }
   const response = await chrome.runtime.sendMessage({ type: "fetchEntry", word, language });
   if (!response?.ok) {
     throw Object.assign(new Error(response?.error || "unavailable"), {
@@ -203,11 +245,21 @@ async function fetchEntry(word, language) {
 async function enrichNounGender(result, rect, id) {
   const headword = result.lemma || result.headword;
   const genders = await fetchNounGenders(headword, result.language, result.entries);
-  if (id === requestId && popup && genders.length) renderResult({ ...result, genders }, rect);
+  if (id === requestId && popup && genders.length && activeResult) {
+    renderResult({ ...activeResult, genders }, rect);
+  }
+}
+
+async function enrichMixedForms(result, rect, id) {
+  if (!result.enrichForms) return;
+  const enriched = await result.enrichForms();
+  if (id === requestId && popup) {
+    renderResult({ ...enriched, genders: activeResult?.genders || [] }, rect);
+  }
 }
 
 async function fetchNounGenders(word, language, entries) {
-  if (!showGender || !WORD_LOOKUP_LANGUAGES[language]?.apy
+  if (!settings.showGender || !WORD_LOOKUP_LANGUAGES[language]?.apy
     || !entries.some((entry) => entry.partOfSpeech.toLowerCase() === "noun")) return [];
 
   try {
@@ -218,22 +270,107 @@ async function fetchNounGenders(word, language, entries) {
   }
 }
 
-function findForm(entries, language) {
-  if (!entries.length || entries.some((entry) => !isFormOnly(entry, language))) return null;
-
-  const matches = entries.flatMap((entry) => (entry.definitions || [])
-    .map((item) => parseFormDefinition(item.definition, language))
-    .filter(Boolean)
-    .map((form) => ({ ...form, partOfSpeech: entry.partOfSpeech || "Entry" })));
-  const lemmas = new Set(matches.map((match) =>
-    match.lemma.toLocaleLowerCase(language)));
-  return lemmas.size === 1 ? matches[0] : null;
+function findForm(entries, language, { forms, formOnly } = collectForms(entries, language)) {
+  if (!formOnly) return null;
+  const lemmas = new Set(forms.map(({ lemma }) => lemma.toLocaleLowerCase(language)));
+  return lemmas.size === 1 ? forms[0] : null;
 }
 
-function parseFormDefinition(html, language) {
-  const parsed = new DOMParser().parseFromString(html || "", "text/html");
+function collectForms(entries, language) {
+  const forms = [];
+  let formOnly = entries.length > 0;
+  for (const [sourceIndex, entry] of entries.entries()) {
+    if (!entry.definitions?.length) formOnly = false;
+    for (const item of entry.definitions || []) {
+      if (!FORM_HINT.test(item.definition)) {
+        formOnly = false;
+        continue;
+      }
+      const source = parseHtml(item.definition);
+      const parsed = parseFormDefinition(item.definition, language, source);
+      if (!isFormDefinitionHtml(item.definition, source) && !parsed) formOnly = false;
+      if (parsed && isLookupWord(parsed.lemma)) {
+        forms.push({ ...parsed, partOfSpeech: entry.partOfSpeech || "Entry", sourceIndex });
+      }
+    }
+  }
+  return { forms, formOnly };
+}
+
+// Fetch one lemma now. Other distinct lemmas are requested only on expansion.
+async function resolveForms(forms, language, firstEntries, display) {
+  const seen = new Set();
+  const unique = forms.filter((form) => {
+    const key = form.lemma.toLocaleLowerCase(language);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const first = await resolveForm(unique[0], language, firstEntries);
+  const result = display([first]);
+  if (unique.length > 1) {
+    result.formCount = unique.length;
+    result.expandForms = async () => {
+      const remaining = await Promise.all(unique.slice(1).map((form) =>
+        resolveForm(form, language, firstEntries)));
+      return display([first, ...remaining]);
+    };
+  }
+  return result;
+}
+
+async function resolveForm(form, language, firstEntries) {
+  try {
+    const fetched = await fetchEntry(form.lemma, language);
+    const matchingEntries = entriesForForm(form, fetched.entries);
+    return { form, entries: matchingEntries.length ? matchingEntries : fetched.entries,
+      resolvedWord: fetched.word };
+  } catch {
+    // Retain the selected word's form descriptions for an unavailable lemma.
+    const key = form.lemma.toLocaleLowerCase(language);
+    const entries = firstEntries.filter((entry) => collectForms([entry], language).forms
+      .some((candidate) => candidate.lemma.toLocaleLowerCase(language) === key));
+    return { form, entries };
+  }
+}
+
+// A participle form belongs to its verb's entries.
+function entriesForForm(form, entries) {
+  const partOfSpeech = form.partOfSpeech.toLowerCase();
+  const target = partOfSpeech === "participle" ? "verb" : partOfSpeech;
+  return entries.filter((entry) => entry.partOfSpeech?.toLowerCase() === target);
+}
+
+function combineMixedForms(original, resolved) {
+  const entries = [];
+  original.entries.forEach((entry, index) => {
+    entries.push(entry);
+    for (const { form, resolvedWord, entries: lemmaEntries } of resolved) {
+      if (!resolvedWord || form.sourceIndex !== index) continue;
+      entries.push(...summarize(entriesForForm(form, lemmaEntries), original.language)
+        .map((item) => ({ ...item, variant: resolvedWord })));
+    }
+  });
+  return { ...original, entries, enrichForms: undefined };
+}
+
+function combineForms(word, resolved, language, original) {
+  const firstResolved = resolved.find(({ resolvedWord }) => resolvedWord);
+  if (!firstResolved) return original();
+  return {
+    word,
+    relationship: resolved.map(({ form }) => form.relationship).join(" / "),
+    lemma: resolved.map(({ form }) => form.lemma).join(" / "),
+    language,
+    entries: summarize(resolved.flatMap(({ entries }) => entries), language),
+    genders: [],
+    page: firstResolved.resolvedWord
+  };
+}
+
+function parseFormDefinition(html, language, source = parseHtml(html)) {
+  const { parsed, text } = source;
   const form = parsed.querySelector(".form-of-definition");
-  const text = parsed.body.textContent.replace(/\s+/g, " ").trim();
 
   if (form) {
     const localizedLinks = [...form.querySelectorAll(
@@ -246,22 +383,28 @@ function parseFormDefinition(html, language) {
       lemma: links[0].getAttribute("title") || links[0].textContent.trim(),
       relationship: form.textContent.replace(/\s+/g, " ").trim()
     };
+
+    // A structured target without a link is usually a red-link typo. Ignore it
+    // rather than letting its text make an otherwise unambiguous form ambiguous.
+    if (form.querySelector(".form-of-definition-link")) return null;
   }
 
-  // Conservative fallback for older responses without form-of CSS classes.
-  const fallback = text.match(/^((?:(?:first|second|third)(?:-person)?|simple past|past tense|past participle|present participle|gerund|plural|singular|infinitive|imperative|feminine|masculine|comparative|superlative|inflection|spelling|form)\b.*?\bof)\s+([\p{L}\p{M}'’\-]+)$/iu);
+  const fallback = text.match(FORM_FALLBACK);
   return fallback ? { relationship: text, lemma: fallback[2] } : null;
 }
 
 function summarize(entries, language) {
   return entries.map((entry) => {
     const senses = (entry.definitions || [])
-      .map((item) => ({
-        gloss: textFromHtml(item.definition),
-        example: textFromHtml(item.parsedExamples?.[0]?.example || item.examples?.[0]),
-        translation: textFromHtml(item.parsedExamples?.[0]?.translation),
-        form: isFormDefinitionHtml(item.definition)
-      }))
+      .map((item) => {
+        const source = parseHtml(item.definition);
+        return {
+          gloss: source.text,
+          example: parseHtml(item.parsedExamples?.[0]?.example || item.examples?.[0]).text,
+          translation: parseHtml(item.parsedExamples?.[0]?.translation).text,
+          form: isFormDefinitionHtml(item.definition, source)
+        };
+      })
       .filter((sense) => sense.gloss)
       .filter((sense, index, all) => !sense.form || !all.slice(0, index)
         .some((previous) => previous.form && previous.gloss.includes(sense.gloss)))
@@ -274,27 +417,22 @@ function summarize(entries, language) {
   }).filter((entry) => entry.senses.length);
 }
 
-function isFormDefinitionHtml(html) {
-  const parsed = new DOMParser().parseFromString(html || "", "text/html");
-  const text = parsed.body.textContent.replace(/\s+/g, " ").trim();
+function isFormDefinitionHtml(html, source = parseHtml(html)) {
+  const { parsed, text } = source;
   return Boolean(parsed.querySelector(".form-of-definition"))
-    || /^(?:contraction|plural|singular|inflection|form|simple past|past tense|past participle|present participle|gerund|infinitive|imperative|feminine|masculine|comparative|superlative|(?:first|second|third)(?:-person)?)\b.*\bof\b/iu.test(text);
+    || FORM_LABEL.test(text);
 }
 
-function isFormOnly(entry, language) {
-  const definitions = entry.definitions || [];
-  return definitions.length > 0 && definitions.every((item) =>
-    isFormDefinitionHtml(item.definition) || Boolean(parseFormDefinition(item.definition, language)));
-}
-
-function textFromHtml(html) {
-  const parsed = new DOMParser().parseFromString(html || "", "text/html");
+function parseHtml(html) {
+  const parsed = new DOMParser().parseFromString(
+    typeof html === "string" ? html : "",
+    "text/html"
+  );
   parsed.querySelectorAll("style, script").forEach((node) => node.remove());
-  return parsed.body.textContent.replace(/\s+/g, " ").trim();
-}
-
-function pageUrl(word) {
-  return `https://en.wiktionary.org/wiki/${encodeURIComponent(word)}`;
+  return {
+    parsed,
+    text: parsed.body.textContent.replace(/\s+/g, " ").trim()
+  };
 }
 
 function hasWholeWordBoundaries(range) {
@@ -304,7 +442,7 @@ function hasWholeWordBoundaries(range) {
 }
 
 function normalizeSelectedWord(word, range, language) {
-  if (!WORD.test(word)) return null;
+  if (!isLookupWord(word)) return null;
 
   const elision = ELISIONS[language];
   if (hasWholeWordBoundaries(range)) {
@@ -390,6 +528,7 @@ function createPopup(role) {
 }
 
 function renderResult(result, rect) {
+  activeResult = result;
   createPopup("dialog");
 
   const headword = result.lemma || result.headword || result.word;
@@ -420,13 +559,13 @@ function renderResult(result, rect) {
     const entryLabel = entry.variant ? `${partOfSpeech} · ${entry.variant}` : partOfSpeech;
     popup.appendChild(element("div", entryLabel, "wl-entry"));
 
-    const list = document.createElement("ol");
+    const list = document.createElement("ul");
     entry.senses.forEach((sense) => {
       const item = element("li", sense.gloss, sense.form ? "wl-form" : undefined);
-      if (showExamples && sense.example) {
+      if (settings.showExamples && sense.example) {
         item.appendChild(element("div", sense.example, "wl-example"));
       }
-      if (showExamples && sense.translation) {
+      if (settings.showExamples && sense.translation) {
         item.appendChild(element("div", sense.translation, "wl-translation"));
       }
       list.appendChild(item);
@@ -434,8 +573,31 @@ function renderResult(result, rect) {
     popup.appendChild(list);
   });
 
+  if (result.expandForms) {
+    popup.appendChild(element("div", result.lemma
+      ? `First of ${result.formCount} forms` : "Form descriptions", "wl-form-count"));
+    const button = element("button", "Show all forms", "wl-expand");
+    button.type = "button";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.textContent = "Loading forms…";
+      // An in-flight gender response for the first form must not replace all forms.
+      const id = ++requestId;
+      try {
+        const expanded = await result.expandForms();
+        if (id === requestId && popup) renderResult(expanded, rect);
+      } catch {
+        if (id === requestId && popup?.contains(button)) {
+          button.disabled = false;
+          button.textContent = "Show all forms";
+        }
+      }
+    });
+    popup.appendChild(button);
+  }
+
   const link = element("a", "Full Wiktionary entry", "wl-link");
-  link.href = result.url;
+  link.href = pageUrl(result.page);
   link.target = "_blank";
   link.rel = "noopener noreferrer";
   popup.appendChild(link);
@@ -487,8 +649,18 @@ function localizeRelationship(text, language) {
   return text;
 }
 
+function renderLoading(word, rect) {
+  createPopup("status");
+  popup.setAttribute("aria-label", `Word lookup: ${word}`);
+  popup.replaceChildren(
+    element("strong", word, "wl-title"),
+    element("div", "Looking up…", "wl-loading")
+  );
+  positionPopup(rect);
+}
+
 function renderError(word, code, language, rect) {
-  if (code === "not_found" && !showNotFound) {
+  if (code === "not_found" && !settings.showNotFound) {
     removePopup();
     return;
   }
@@ -541,7 +713,9 @@ function positionPopup(rect) {
 }
 
 function removePopup() {
+  clearLoadingTimer();
   popup?.remove();
   popup = null;
+  activeResult = null;
   requestId += 1;
 }

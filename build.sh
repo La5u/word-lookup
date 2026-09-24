@@ -13,8 +13,9 @@ mkdir -p "$output_dir"
 for browser in chromium firefox; do
   package_dir="$temp_dir/$browser"
   mkdir -p "$package_dir"
-  cp background.js content.css content.js languages.js settings.css settings.html settings.js README.md LICENSE "$package_dir/"
-  cp -r assets "$package_dir/"
+  cp background.js content.css content.js history.js languages.js shared.js settings.css settings.html settings.js LICENSE "$package_dir/"
+  mkdir -p "$package_dir/assets"
+  cp assets/icon-*.png "$package_dir/assets/"
   cp manifest.json "$package_dir/manifest.json"
 
   if [ "$browser" = firefox ]; then
@@ -25,7 +26,7 @@ import sys
 path = sys.argv[1]
 with open(path, encoding="utf-8") as file:
     manifest = json.load(file)
-manifest["background"] = {"scripts": ["languages.js", "background.js"]}
+manifest["background"] = {"scripts": ["languages.js", "shared.js", "history.js", "background.js"]}
 manifest["browser_specific_settings"] = {
     "gecko": {
         "id": "word-lookup@lasu.dev",

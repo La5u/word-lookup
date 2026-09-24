@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "check": "node --check background.js && node --check content.js && node --check languages.js && node --check settings.js && npm test && ./build.sh"
+    "check": "for file in *.js; do node --check \"$file\" || exit 1; done && npm test && ./build.sh"
   },
   "devDependencies": {
     "linkedom": "^0.18.12"

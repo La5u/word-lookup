@@ -9,26 +9,46 @@
   <body>
     <main>
       <h1>Word Lookup</h1>
-      <label class="toggle" for="enabled">
-        <span>Enable lookups</span>
-        <input id="enabled" type="checkbox">
-      </label>
-      <label class="toggle" for="show-examples">
-        <span>Show example sentences</span>
-        <input id="show-examples" type="checkbox">
-      </label>
-      <label class="toggle" for="show-gender">
-        <span>Show noun gender</span>
-        <input id="show-gender" type="checkbox">
-      </label>
-      <label class="toggle" for="show-not-found">
-        <span>Show “no entry found”</span>
-        <input id="show-not-found" type="checkbox">
-      </label>
-      <label for="language">Source language</label>
-      <select id="language"></select>
+      <nav class="tabs" role="tablist" aria-label="Popup sections">
+        <button id="settings-tab" type="button" role="tab" aria-selected="true" aria-controls="settings-panel" tabindex="0">Settings</button>
+        <button id="history-tab" type="button" role="tab" aria-selected="false" aria-controls="history-panel" tabindex="-1">History</button>
+      </nav>
+
+      <section id="settings-panel" role="tabpanel" aria-labelledby="settings-tab">
+        <label class="toggle" for="enabled">
+          <span>Enable lookups</span>
+          <input id="enabled" type="checkbox">
+        </label>
+        <label class="toggle" for="show-examples">
+          <span>Show example sentences</span>
+          <input id="show-examples" type="checkbox">
+        </label>
+        <label class="toggle" for="show-gender">
+          <span>Show noun gender</span>
+          <input id="show-gender" type="checkbox">
+        </label>
+        <label class="toggle" for="show-not-found">
+          <span>Show “no entry found”</span>
+          <input id="show-not-found" type="checkbox">
+        </label>
+        <label class="toggle" for="show-loading">
+          <span>Show loading indicator</span>
+          <input id="show-loading" type="checkbox">
+        </label>
+        <label for="language">Word language</label>
+        <select id="language"></select>
+      </section>
+
+      <section id="history-panel" role="tabpanel" aria-labelledby="history-tab" hidden>
+        <div class="history-actions">
+          <button id="clear-history" type="button">Clear all</button>
+        </div>
+        <div id="history-list" aria-live="polite"></div>
+      </section>
     </main>
     <script src="languages.js"></script>
+    <script src="shared.js"></script>
+    <script src="history.js"></script>
     <script src="settings.js"></script>
   </body>
 </html>

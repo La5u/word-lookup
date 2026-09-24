@@ -2,29 +2,55 @@
 
 Word Lookup is a small browser extension that shows English Wiktionary
 definitions for a selected word. It supports English, French, Spanish, German,
-Italian, Dutch, Swedish, and Romanian source words.
+Italian, Dutch, Swedish, and Romanian words.
+
+## Get the extension
+
+- [Chrome Web Store](https://chromewebstore.google.com/detail/word-lookup/fmkaeiligcgpdmmblhkjangciejijpco)
+- [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/word_lookup/)
+- [Project page](https://lasu.dev/word-lookup/)
+
+![Illustrative preview of a selected word and the Word Lookup definition popup](screenshots/lookup.png)
+
+The image is an illustrative preview using the extension's popup renderer and
+sample text, not a live Wiktionary response. To regenerate it with Chromium:
+
+```sh
+chromium --headless --no-sandbox --disable-gpu --hide-scrollbars \
+  --window-size=1280,800 --virtual-time-budget=1500 \
+  --screenshot="$PWD/screenshots/lookup.png" "file://$PWD/screenshots/demo.html"
+```
 
 ## How it works
 
 1. Select one complete word on a web page.
-2. The content script sends the word and selected source language to the
+2. The content script sends the word and selected word language to the
    extension's background script.
 3. The background script requests the word's entry from English Wiktionary.
 4. The extension extracts definitions, parts of speech, example sentences, and
-   links to related headwords, then displays them beside the selection.
+   links to related headwords, then displays them beside the selection. For an
+   ambiguous form, it looks up the first headword; **Show all forms** fetches the
+   remaining headwords only when requested.
 5. When noun gender is enabled for a supported language, the background script
    also asks Apertium for morphological analysis.
 
-Lookups, examples, noun genders, and “no entry found” messages can be configured
-from the extension popup. Preferences are stored locally by the browser.
+Lookups, examples, noun genders, the loading indicator, and “no entry found”
+messages can be configured from the Settings tab in the extension popup. The
+History tab keeps the 100 most recently looked-up headword/language pairs
+locally, deduplicated and shown with links to Wiktionary. Inflected forms are
+recorded under the headword that was displayed. You can clear the list at once.
+Older history entries are reduced to this format on the next lookup. Gender
+enrichment is display-only and does not write a second history entry. The enabled
+setting can also be toggled with the suggested **Alt+Shift+L** browser shortcut.
+Preferences and history are stored locally by the browser; failed or unavailable
+lookups are not recorded.
 
 ## APIs
 
 - **English Wiktionary REST API**
   (`https://en.wiktionary.org/api/rest_v1/page/definition/`) provides
   definitions, parts of speech, examples, and inflection information.
-  English Wiktionary contains entries for words from all supported source
-  languages.
+  English Wiktionary contains entries for words from all supported languages.
 
 - **Apertium APY** (`https://www.apertium.org/apy/analyze`) provides
   morphological analysis used only to identify noun gender. No request
@@ -32,8 +58,11 @@ from the extension popup. Preferences are stored locally by the browser.
   unsupported by the analyzer.
 
 Selected words are sent to these services as needed. The extension does not run
-a server and locally stores only its enabled preferences and source-language
-choice.
+a server. It locally stores its enabled and display preferences, the selected
+word language (under the existing `sourceLanguage` storage key for migration
+compatibility), and up to 100 successful lookup history records containing only
+the headword and its language. History mutations are serialized by the
+background service worker, and failed lookups are not added.
 
 Definitions and examples come from English Wiktionary contributors. Wiktionary
 text is available under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)
@@ -52,7 +81,7 @@ affiliated with the Wikimedia Foundation.
 ### Firefox 140+
 
 1. Run `./build.sh`.
-2. Extract `dist/word-lookup-0.2.0-firefox.zip`.
+2. Extract `dist/word-lookup-<version>-firefox.zip`.
 3. Open `about:debugging#/runtime/this-firefox`.
 4. Choose **Load Temporary Add-on** and select the extracted `manifest.json`.
 

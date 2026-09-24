@@ -4,7 +4,9 @@ const test = require("node:test");
 const vm = require("node:vm");
 const { parseHTML } = require("linkedom");
 
+const sharedSource = readFileSync("shared.js", "utf8");
 const html = readFileSync("settings.html", "utf8");
+const historySource = readFileSync("history.js", "utf8");
 const source = readFileSync("settings.js", "utf8");
 
 function deferred() {
@@ -24,6 +26,8 @@ test("example sentences default to enabled and persist changes", async () => {
   const writes = [];
   const context = vm.createContext({
     document,
+    URL,
+    TextEncoder,
     WORD_LOOKUP_LANGUAGES: { en: { name: "English" }, de: { name: "German" } },
     chrome: {
       storage: {
@@ -34,6 +38,8 @@ test("example sentences default to enabled and persist changes", async () => {
       }
     }
   });
+  vm.runInContext(sharedSource, context);
+  vm.runInContext(historySource, context);
   vm.runInContext(source, context);
 
   pending.resolve({
@@ -68,9 +74,13 @@ test("a user change is not overwritten by a delayed storage read", async () => {
   const pending = deferred();
   const context = vm.createContext({
     document,
+    URL,
+    TextEncoder,
     WORD_LOOKUP_LANGUAGES: { en: { name: "English" } },
     chrome: { storage: { local: { get: () => pending.promise, set() {} } } }
   });
+  vm.runInContext(sharedSource, context);
+  vm.runInContext(historySource, context);
   vm.runInContext(source, context);
 
   const checkbox = document.querySelector("#show-examples");

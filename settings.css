@@ -1,6 +1,8 @@
 body {
-  width: 230px;
+  width: 330px;
+  max-height: 600px;
   margin: 0;
+  overflow-y: auto;
   color: #202122;
   font: 14px/1.4 system-ui, sans-serif;
 }
@@ -10,8 +12,31 @@ main {
 }
 
 h1 {
-  margin: 0 0 14px;
+  margin: 0 0 10px;
   font-size: 17px;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 -2px 14px;
+  border-bottom: 1px solid #c8ccd1;
+}
+
+.tabs button {
+  padding: 5px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #54595d;
+  cursor: pointer;
+  font: inherit;
+}
+
+.tabs button[aria-selected="true"] {
+  border-bottom-color: #36c;
+  color: #202122;
+  font-weight: 600;
 }
 
 label {
@@ -36,4 +61,53 @@ select {
   box-sizing: border-box;
   width: 100%;
   padding: 6px;
+}
+
+.history-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+button {
+  padding: 5px 9px;
+  border: 1px solid #a2a9b1;
+  border-radius: 3px;
+  background: #f8f9fa;
+  color: #202122;
+  cursor: pointer;
+  font: inherit;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.history-empty {
+  color: #72777d;
+}
+
+.history-entry {
+  padding: 8px 0;
+  border-top: 1px solid #eaecf0;
+}
+
+.history-word {
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.history-language {
+  color: #54595d;
+  font-size: 12px;
+}
+
+.history-link {
+  color: #36c;
+  font-size: 12px;
+}
+
+[hidden] {
+  display: none !important;
 }

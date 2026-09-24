@@ -4,7 +4,6 @@
   position: fixed;
   z-index: 2147483647;
   width: min(300px, calc(100vw - 16px));
-  max-height: min(360px, calc(100vh - 16px));
   overflow: auto;
   padding: 12px 14px;
   border: 1px solid #d8d8d8;
@@ -31,12 +30,15 @@
   font-weight: 600;
 }
 
-#word-lookup-popup ol {
+#word-lookup-popup ul {
   margin: 4px 0 8px;
   padding-left: 22px;
+  list-style: disc outside;
 }
 
 #word-lookup-popup li {
+  display: list-item;
+  list-style: disc outside;
   margin: 2px 0;
   font-size: 16px;
 }
@@ -44,7 +46,6 @@
 #word-lookup-popup li.wl-form {
   color: #72777d;
   font-size: 14px;
-  list-style: none;
 }
 
 #word-lookup-popup .wl-example {
@@ -59,6 +60,28 @@
   font-size: 14px;
 }
 
+#word-lookup-popup .wl-form-count {
+  margin-top: 8px;
+  color: #54595d;
+  font-size: 13px;
+}
+
+#word-lookup-popup .wl-expand {
+  display: block;
+  margin: 3px 0 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #36c;
+  font: inherit;
+  cursor: pointer;
+}
+
+#word-lookup-popup .wl-expand:disabled {
+  color: #72777d;
+  cursor: default;
+}
+
 #word-lookup-popup .wl-link {
   color: #36c;
   text-decoration: none;
@@ -68,6 +91,7 @@
   text-decoration: underline;
 }
 
-#word-lookup-popup .wl-error {
+#word-lookup-popup .wl-error,
+#word-lookup-popup .wl-loading {
   color: #72777d;
 }

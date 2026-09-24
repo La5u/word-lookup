@@ -3,7 +3,9 @@ const { readFileSync } = require("node:fs");
 const test = require("node:test");
 const vm = require("node:vm");
 
+const sharedSource = readFileSync("shared.js", "utf8");
 const source = readFileSync("background.js", "utf8");
+const historySource = readFileSync("history.js", "utf8");
 const languages = {
   en: { name: "English" },
   fr: { name: "French", apy: "fra" },
@@ -28,6 +30,7 @@ function harness(fetch, timers = {}) {
   let listener;
   const context = vm.createContext({
     AbortController,
+    TextEncoder,
     URL,
     URLSearchParams,
     WORD_LOOKUP_LANGUAGES: languages,
@@ -36,10 +39,13 @@ function harness(fetch, timers = {}) {
     setTimeout: timers.setTimeout || setTimeout,
     chrome: {
       runtime: {
+        getManifest: () => ({ version: "0.0.0" }),
         onMessage: { addListener(value) { listener = value; } }
       }
     }
   });
+  vm.runInContext(sharedSource, context);
+  vm.runInContext(historySource, context);
   vm.runInContext(source, context);
   return (message) => new Promise((resolve) => {
     assert.equal(listener(message, {}, resolve), true);
@@ -50,13 +56,21 @@ function definitionUrlWord(url) {
   return decodeURIComponent(url.split("/").at(-1));
 }
 
+function apiEntry(partOfSpeech, definition) {
+  return { partOfSpeech, definitions: [{ definition }] };
+}
+
 test("prefers a lowercase common entry over an exact proper noun", async () => {
   const requested = [];
   const send = harness(async (url) => {
     const word = definitionUrlWord(url);
     requested.push(word);
-    if (word === "House") return response({ en: [{ partOfSpeech: "Proper noun" }] });
-    if (word === "house") return response({ en: [{ partOfSpeech: "Noun" }] });
+    if (word === "House") {
+      return response({ en: [apiEntry("Proper noun", "A family or dynastic name.")] });
+    }
+    if (word === "house") {
+      return response({ en: [apiEntry("Noun", "A building in which people live.")] });
+    }
     throw new Error(`unexpected ${word}`);
   });
 
@@ -68,9 +82,9 @@ test("prefers a lowercase common entry over an exact proper noun", async () => {
 
 test("returns both German capitalization variants when both have entries", async () => {
   const data = {
-    Machen: { de: [{ partOfSpeech: "Noun" }] },
-    machen: { de: [{ partOfSpeech: "Verb" }] },
-    Haus: { de: [{ partOfSpeech: "Noun" }] },
+    Machen: { de: [apiEntry("Noun", "The act of making.")] },
+    machen: { de: [apiEntry("Verb", "To make or do.")] },
+    Haus: { de: [apiEntry("Noun", "A building in which people live.")] },
     haus: null
   };
   const send = harness(async (url) => response(data[definitionUrlWord(url)]));
@@ -91,7 +105,9 @@ test("returns both German capitalization variants when both have entries", async
 test("keeps an exact German result when the lowercase probe fails", async () => {
   const send = harness(async (url) => {
     const word = definitionUrlWord(url);
-    if (word === "Garten") return response({ de: [{ partOfSpeech: "Noun" }] });
+    if (word === "Garten") {
+      return response({ de: [apiEntry("Noun", "A cultivated outdoor area.")] });
+    }
     throw new Error("lowercase probe failed");
   });
 
@@ -104,12 +120,77 @@ test("keeps an exact German result when the lowercase probe fails", async () => 
 test("falls back from a lowercase German spelling to title case", async () => {
   const send = harness(async (url) => {
     const word = definitionUrlWord(url);
-    return response(word === "Kind" ? { de: [{ partOfSpeech: "Noun" }] } : null);
+    return response(word === "Kind"
+      ? { de: [apiEntry("Noun", "A child.")] }
+      : null);
   });
 
   const result = await send({ type: "fetchEntry", word: "kind", language: "de" });
   assert.equal(result.ok, true);
   assert.equal(result.data.word, "Kind");
+});
+
+test("normalizes malformed definition entries and examples at the API boundary", async () => {
+  const send = harness(async (url) => {
+    if (definitionUrlWord(url) === "malformed") {
+      return response({ en: [null, { partOfSpeech: "Verb" }, { definitions: [] }] });
+    }
+    return response({
+      en: [
+        null,
+        {
+          partOfSpeech: { value: "not text" },
+          definitions: [
+            null,
+            {
+              definition: "A valid definition.",
+              parsedExamples: [
+                { example: "Use it.", translation: "Utilisez-le." },
+                { example: { malformed: true } },
+                "A string example."
+              ],
+              examples: [{ example: "Fallback example." }, null, 42]
+            }
+          ]
+        },
+        { partOfSpeech: "Verb", definitions: { malformed: true } },
+        { partOfSpeech: "Noun", definitions: [] },
+        { partOfSpeech: "Adjective" }
+      ]
+    });
+  });
+
+  const result = await send({ type: "fetchEntry", word: "word", language: "en" });
+  assert.equal(result.ok, true);
+  assert.equal(JSON.stringify(result.data.entries), JSON.stringify([{
+    partOfSpeech: "Entry",
+    definitions: [{
+      definition: "A valid definition.",
+      parsedExamples: [
+        { example: "Use it.", translation: "Utilisez-le." },
+        { example: "A string example." }
+      ],
+      examples: ["Fallback example."]
+    }]
+  }]));
+
+  const malformed = await send({ type: "fetchEntry", word: "malformed", language: "en" });
+  assert.deepEqual([malformed.ok, malformed.error], [false, "not_found"]);
+});
+
+test("rejects non-string and overlong lookup words consistently", async () => {
+  let calls = 0;
+  const send = harness(async () => {
+    calls += 1;
+    return response({ en: [] });
+  });
+
+  const longWord = "a".repeat(201);
+  const invalidEntry = await send({ type: "fetchEntry", word: longWord, language: "en" });
+  const invalidGender = await send({ type: "fetchGender", word: 42, language: "fr" });
+  assert.deepEqual([invalidEntry.ok, invalidEntry.error], [false, "invalid"]);
+  assert.deepEqual([invalidGender.ok, invalidGender.error], [false, "invalid"]);
+  assert.equal(calls, 0);
 });
 
 test("maps supported languages to Apertium and extracts noun genders only", async () => {
