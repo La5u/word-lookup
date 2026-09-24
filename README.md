@@ -10,15 +10,14 @@ Italian, Dutch, Swedish, and Romanian words.
 - [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/word_lookup/)
 - [Project page](https://lasu.dev/word-lookup/)
 
-![Illustrative preview of a selected word and the Word Lookup definition popup](screenshots/lookup.png)
+![Word Lookup popup for “pâte” on the French Wikipedia article about croissants](screenshots/french.png)
 
-The image is an illustrative preview using the extension's popup renderer and
-sample text, not a live Wiktionary response. To regenerate it with Chromium:
+The screenshots in `screenshots/` show live lookups on Wikipedia in French,
+German, Spanish, Italian, and Swedish. They are 1280×800 PNGs for the store
+listings. To regenerate them with Chromium and the unpacked extension:
 
 ```sh
-chromium --headless --no-sandbox --disable-gpu --hide-scrollbars \
-  --window-size=1280,800 --virtual-time-budget=1500 \
-  --screenshot="$PWD/screenshots/lookup.png" "file://$PWD/screenshots/demo.html"
+node screenshots/capture.mjs "$PWD" "$PWD/screenshots" [french,german,...]
 ```
 
 ## How it works
