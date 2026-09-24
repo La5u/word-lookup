@@ -34,7 +34,11 @@ const POS_LABELS = {
 const MAX_DEPTH = 3;
 const MAX_GLOSSES = 3;
 const LOADING_DELAY_MS = 180;
+// Wiktionary can take seconds for a large lemma page; show the form description meanwhile.
+const PARTIAL_DELAY_MS = 400;
 let popup;
+// The selected word; the popup follows it when the page scrolls or resizes.
+let anchor = null;
 let activeResult = null;
 let loadingTimer = null;
 let requestId = 0;
@@ -68,9 +72,11 @@ document.addEventListener("mouseup", handleMouseUp);
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") removePopup();
 });
-window.addEventListener("resize", removePopup);
+window.addEventListener("resize", followAnchor);
+// Pages scroll on their own too (lazy images, scroll anchoring), so reposition
+// rather than close, and never cancel a lookup that is still loading.
 window.addEventListener("scroll", (event) => {
-  if (!popup?.contains(event.target)) removePopup();
+  if (popup && !popup.contains(event.target)) followAnchor();
 }, true);
 
 async function handleMouseUp(event) {
@@ -104,6 +110,7 @@ async function handleMouseUp(event) {
   }
 
   removePopup();
+  anchor = range.cloneRange();
   const id = requestId;
   scheduleLoading(word, rect, id);
 
@@ -197,23 +204,28 @@ async function lookup(word, lookupWord, language, onPartial) {
   const visited = new Set([lookupWord.toLocaleLowerCase(language)]);
   let lemma = form.lemma;
   let lemmaEntries = [];
+  const partial = onPartial && setTimeout(() => onPartial(original()), PARTIAL_DELAY_MS);
 
-  for (let depth = 0; depth < MAX_DEPTH; depth += 1) {
-    const key = lemma.toLocaleLowerCase(language);
-    if (visited.has(key)) break;
-    visited.add(key);
-    let fetched;
-    try {
-      fetched = await fetchEntry(lemma, language);
-    } catch {
-      return original();
+  try {
+    for (let depth = 0; depth < MAX_DEPTH; depth += 1) {
+      const key = lemma.toLocaleLowerCase(language);
+      if (visited.has(key)) break;
+      visited.add(key);
+      let fetched;
+      try {
+        fetched = await fetchEntry(lemma, language);
+      } catch {
+        return original();
+      }
+      lemma = fetched.word;
+      lemmaEntries = fetched.entries;
+      const next = findForm(lemmaEntries, language);
+      if (!next || visited.has(next.lemma.toLocaleLowerCase(language))) break;
+      if (depth === MAX_DEPTH - 1) break;
+      lemma = next.lemma;
     }
-    lemma = fetched.word;
-    lemmaEntries = fetched.entries;
-    const next = findForm(lemmaEntries, language);
-    if (!next || visited.has(next.lemma.toLocaleLowerCase(language))) break;
-    if (depth === MAX_DEPTH - 1) break;
-    lemma = next.lemma;
+  } finally {
+    clearTimeout(partial);
   }
 
   const matchingEntries = entriesForForm(form, lemmaEntries);
@@ -688,7 +700,21 @@ function element(tag, text, className) {
   return node;
 }
 
+function followAnchor() {
+  if (!popup) return;
+  const rect = anchor?.getBoundingClientRect();
+  if (!rect || (!rect.width && !rect.height)
+    || rect.bottom < 0 || rect.top > window.innerHeight) {
+    removePopup();
+    return;
+  }
+  positionPopup(rect);
+}
+
 function positionPopup(rect) {
+  // Late renders (gender, lemma definitions) use the word's current position.
+  const current = anchor?.getBoundingClientRect();
+  if (current && (current.width || current.height)) rect = current;
   const gap = 8;
   const viewportWidth = Math.max(0, window.innerWidth);
   const viewportHeight = Math.max(0, window.innerHeight);
@@ -716,6 +742,7 @@ function removePopup() {
   clearLoadingTimer();
   popup?.remove();
   popup = null;
+  anchor = null;
   activeResult = null;
   requestId += 1;
 }

@@ -72,9 +72,11 @@ async function fetchEntry(word, language) {
     throw lookupError("invalid");
   }
 
-  const exactEntries = entriesFor(await fetchDefinitions(word), language);
   const lowercase = word.toLocaleLowerCase(language);
   const preserveCase = WORD_LOOKUP_LANGUAGES[language].preserveCase;
+  // Case-preserving languages always need both spellings, so request them together.
+  if (preserveCase && lowercase !== word) fetchDefinitions(lowercase).catch(() => {});
+  const exactEntries = entriesFor(await fetchDefinitions(word), language);
   const exactIsProperNoun = exactEntries.length
     && exactEntries.every((entry) => entry.partOfSpeech?.toLowerCase() === "proper noun");
 

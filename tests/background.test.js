@@ -251,3 +251,21 @@ test("times out a stalled fetch and evicts it from the cache", async () => {
   assert.deepEqual([second.ok, second.error], [false, "unavailable"]);
   assert.equal(calls, 2);
 });
+
+test("case-preserving languages request both spellings in parallel", async () => {
+  const requested = [];
+  let releaseExact;
+  const send = harness(async (url) => {
+    requested.push(decodeURIComponent(url.split("/").pop()));
+    if (url.endsWith("/Haus")) await new Promise((resolve) => { releaseExact = resolve; });
+    return response({ de: [{ partOfSpeech: "Noun", definitions: [{ definition: "house" }] }] });
+  });
+
+  const pending = send({ type: "fetchEntry", word: "Haus", language: "de" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(requested.sort(), ["Haus", "haus"]);
+  releaseExact();
+  const result = await pending;
+  assert.equal(result.ok, true);
+  assert.equal(requested.length, 2);
+});

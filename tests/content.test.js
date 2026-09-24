@@ -694,7 +694,8 @@ test("dismisses the old popup immediately when a new lookup starts", async () =>
     getRangeAt: () => ({
       startContainer: wordNode, startOffset: 0,
       endContainer: wordNode, endOffset: 3,
-      getBoundingClientRect: () => ({ left: 10, top: 10, right: 30, bottom: 20, width: 20, height: 10 })
+      getBoundingClientRect: () => ({ left: 10, top: 10, right: 30, bottom: 20, width: 20, height: 10 }),
+      cloneRange() { return this; }
     }),
     containsNode: () => true
   };
@@ -718,4 +719,59 @@ test("popup positioning keeps its final height within the chosen side", () => {
   assert.equal(context.fakePopup.style.maxHeight, "360px");
   assert.equal(context.fakePopup.style.left, "492px");
   assert.equal(context.fakePopup.style.top, "182px");
+});
+
+test("page scrolls move the popup with its word and close it only off screen", () => {
+  const { context, document, run } = harness();
+  let wordRect = { left: 10, top: 100, right: 40, bottom: 120, width: 30, height: 20 };
+  context.fixtureAnchor = { getBoundingClientRect: () => wordRect };
+  context.fixtureResult = {
+    word: "cat", headword: "cat", language: "en", genders: [], page: "cat",
+    entries: [{ partOfSpeech: "Noun", senses: [{ gloss: "A small animal." }] }]
+  };
+  run("renderResult(fixtureResult, { left: 0, top: 0, right: 0, bottom: 0 }); anchor = fixtureAnchor");
+  const id = run("requestId");
+
+  // linkedom has no layout, so record where the popup is asked to go.
+  run("positionPopup = (rect) => { positionedAt = rect.top; }");
+  wordRect = { left: 10, top: 300, right: 40, bottom: 320, width: 30, height: 20 };
+  document.defaultView.dispatchEvent(new document.defaultView.Event("scroll"));
+  assert.ok(document.querySelector("#word-lookup-popup"), "a page scroll keeps the popup");
+  assert.equal(run("positionedAt"), 300);
+  assert.equal(run("requestId"), id, "a page scroll does not cancel pending renders");
+
+  wordRect = { left: 10, top: 900, right: 40, bottom: 920, width: 30, height: 20 };
+  document.defaultView.dispatchEvent(new document.defaultView.Event("scroll"));
+  assert.equal(document.querySelector("#word-lookup-popup"), null);
+});
+
+test("a slow lemma shows the form description first", async () => {
+  const { context, run } = harness();
+  let releaseLemma;
+  context.lookupResponses = {
+    went: { word: "went", entries: [{ partOfSpeech: "Verb", definitions: [form("simple past of", "go")] }] },
+    go: { word: "go", entries: [{ partOfSpeech: "Verb", definitions: [{ definition: "To move." }] }] }
+  };
+  context.holdLemma = new Promise((resolve) => { releaseLemma = resolve; });
+  run("fetchEntry = async (word) => { if (word === 'go') await holdLemma; return lookupResponses[word]; }");
+
+  const pending = run("lookup('went', 'went', 'en', (result) => { interim = result; })");
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.equal(context.interim.headword, "went");
+  assert.equal(context.interim.entries[0].senses[0].form, true);
+  releaseLemma();
+  const result = await pending;
+  assert.equal(result.lemma, "go");
+});
+
+test("a fast lemma does not flash the form description", async () => {
+  const { context, run } = harness();
+  context.lookupResponses = {
+    went: { word: "went", entries: [{ partOfSpeech: "Verb", definitions: [form("simple past of", "go")] }] },
+    go: { word: "go", entries: [{ partOfSpeech: "Verb", definitions: [{ definition: "To move." }] }] }
+  };
+  run("fetchEntry = async (word) => lookupResponses[word]");
+  await run("lookup('went', 'went', 'en', (result) => { interim = result; })");
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.equal(context.interim, undefined);
 });
