@@ -2,7 +2,7 @@
   "name": "word-lookup-extension",
   "private": true,
   "scripts": {
-    "test": "node --test tests/*.test.js",
+    "test": "NODE_OPTIONS=--max-old-space-size=512 node --test tests/*.test.js",
     "check": "for file in *.js; do node --check \"$file\" || exit 1; done && npm test && ./build.sh"
   },
   "devDependencies": {

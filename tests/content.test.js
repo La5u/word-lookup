@@ -317,7 +317,7 @@ test("mixed lexical entries defer other form lemmas until Show all forms", async
   document.querySelector(".wl-expand").click();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(JSON.stringify(context.requests), JSON.stringify(["sample", "first", "second"]));
-  assert.equal(document.querySelector(".wl-expand"), null);
+  assert.ok(!document.querySelector(".wl-expand"), "unexpected .wl-expand");
   assert.match(document.querySelector("#word-lookup-popup").textContent, /An independent meaning/);
   assert.match(document.querySelector("#word-lookup-popup").textContent, /Another meaning/);
 });
@@ -427,7 +427,7 @@ test("only fetches the first ambiguous lemma until Show all forms is clicked", a
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(JSON.stringify(context.requests), JSON.stringify(["axes", "axe", "axis"]));
   assert.equal(document.querySelector(".wl-title").textContent, "axe / axis");
-  assert.equal(document.querySelector(".wl-expand"), null);
+  assert.ok(!document.querySelector(".wl-expand"), "unexpected .wl-expand");
   context.finishGender(["f"]);
   await oldGender;
   assert.equal(document.querySelector(".wl-title").textContent, "axe / axis");
@@ -580,7 +580,7 @@ test("labels both German capitalization variants", () => {
 test("not-found messages are opt-in while other errors remain visible", () => {
   const { document, run } = harness();
   run("settings.showNotFound = false; renderError('missing', 'not_found', 'en', { left: 10, top: 10, right: 20, bottom: 20 })");
-  assert.equal(document.querySelector("#word-lookup-popup"), null);
+  assert.ok(!document.querySelector("#word-lookup-popup"), "unexpected #word-lookup-popup");
 
   run("settings.showNotFound = true; renderError('missing', 'not_found', 'en', { left: 10, top: 10, right: 20, bottom: 20 })");
   assert.match(document.querySelector(".wl-error").textContent, /No English entry/);
@@ -640,8 +640,8 @@ test("example sentences are shown by default and can be hidden", () => {
   run("settings.showExamples = true; renderResult(fixtureResult, { left: 10, top: 10, right: 20, bottom: 20 })");
   assert.equal(document.querySelector(".wl-example")?.textContent, "The cat slept.");
   run("settings.showExamples = false; renderResult(fixtureResult, { left: 10, top: 10, right: 20, bottom: 20 })");
-  assert.equal(document.querySelector(".wl-example"), null);
-  assert.equal(document.querySelector(".wl-translation"), null);
+  assert.ok(!document.querySelector(".wl-example"), "unexpected .wl-example");
+  assert.ok(!document.querySelector(".wl-translation"), "unexpected .wl-translation");
 });
 
 test("loading indicator is delayed and cancelled when the lookup is dismissed", () => {
@@ -655,10 +655,10 @@ test("loading indicator is delayed and cancelled when the lookup is dismissed", 
   context.clearTimeout = (id) => cleared.push(id);
 
   run("settings.showLoading = true; requestId = 4; scheduleLoading('word', { left: 10, top: 10, right: 20, bottom: 20 }, 4)");
-  assert.equal(document.querySelector(".wl-loading"), null);
+  assert.ok(!document.querySelector(".wl-loading"), "unexpected .wl-loading");
   run("removePopup()");
   callbacks[0]();
-  assert.equal(document.querySelector(".wl-loading"), null);
+  assert.ok(!document.querySelector(".wl-loading"), "unexpected .wl-loading");
   assert.deepEqual(cleared, [1]);
 
   run("requestId = 6; scheduleLoading('word', { left: 10, top: 10, right: 20, bottom: 20 }, 6)");
@@ -704,7 +704,7 @@ test("dismisses the old popup immediately when a new lookup starts", async () =>
   assert.equal(document.querySelector(".wl-title").textContent, "old");
   run("lookup = () => new Promise(() => {})");
   run("handleMouseUp({ isTrusted: true, target: fakeSelection.getRangeAt().startContainer })");
-  assert.equal(document.querySelector("#word-lookup-popup"), null);
+  assert.ok(!document.querySelector("#word-lookup-popup"), "unexpected #word-lookup-popup");
 });
 
 test("popup positioning keeps its final height within the chosen side", () => {
@@ -742,7 +742,7 @@ test("page scrolls move the popup with its word and close it only off screen", (
 
   wordRect = { left: 10, top: 900, right: 40, bottom: 920, width: 30, height: 20 };
   document.defaultView.dispatchEvent(new document.defaultView.Event("scroll"));
-  assert.equal(document.querySelector("#word-lookup-popup"), null);
+  assert.ok(!document.querySelector("#word-lookup-popup"), "unexpected #word-lookup-popup");
 });
 
 test("a slow lemma shows the form description first", async () => {

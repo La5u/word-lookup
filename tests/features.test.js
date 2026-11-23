@@ -223,8 +223,8 @@ test("history tab lists old and new words, derives safe links, and clears all", 
   assert.equal(harness.document.querySelector(".history-word").textContent, "chat");
   assert.equal(harness.document.querySelector(".history-link").href,
     "https://en.wiktionary.org/wiki/chat");
-  assert.equal(harness.document.querySelector(".history-delete"), null);
-  assert.equal(harness.document.querySelector("#export-history"), null);
+  assert.ok(!harness.document.querySelector(".history-delete"), "unexpected .history-delete");
+  assert.ok(!harness.document.querySelector("#export-history"), "unexpected #export-history");
   harness.document.querySelector("#clear-history").click();
   await harness.ready();
   assert.equal(JSON.stringify(harness.values.lookupHistory), "[]");
